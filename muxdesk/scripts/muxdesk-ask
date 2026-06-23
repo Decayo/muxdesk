@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""muxdesk-ask — muxdesk structured question channel (replaces the AskUserQuestion TUI menu).
+
+Claude uses this script inside a muxdesk session to ask the user multiple-choice questions.
+Both the question and answer are structured JSON throughout; the muxdesk frontend renders
+a card from the data and writes back the answer — no keyboard simulation required
+(no Tab / Space / Enter / Submit emulation at any stage).
+
+Usage:
+  muxdesk-ask '{"questions":[{"question":"...","header":"...","multiSelect":false,
+           "options":[{"label":"A","description":"..."},{"label":"B"}]}]}'
+
+Flow: write <reqid>.req.json → blocking poll for <reqid>.ans.json (written back by muxdesk)
+→ print the answer to stdout (returned to Claude as the Bash tool result).
+Timeout and cancellation both return recognisable messages; the script never blocks forever.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import uuid
+from pathlib import Path
+
+ASK_DIR = Path("/tmp/muxdesk-ask")
+TIMEOUT_SEC = 900.0  # 15-minute timeout guard
+POLL_SEC = 0.4
+
+
+def _fail(msg: str) -> None:
+    print(f"muxdesk-ask: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _format_answer(ans: dict, questions: list) -> str:
+    """Convert the structured answer written back by muxdesk into plain text for Claude
+    (semantically equivalent to an AskUserQuestion reply)."""
+    if ans.get("cancelled"):
+        return "(User cancelled the question and did not answer. Please continue with the available information or ask in a different way.)"
+    answers = ans.get("answers") or {}
+    lines = ["User answered:"]
+    for i, q in enumerate(questions):
+        key = str(q.get("id") if q.get("id") is not None else i)
+        val = answers.get(key)
+        if isinstance(val, list):
+            val = ", ".join(str(x) for x in val)
+        lines.append(f"- {q.get('question', '')} → {val if val not in (None, '') else '(no answer)'}")
+    return "\n".join(lines)
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        _fail("Missing JSON argument. Usage: muxdesk-ask '<json>'")
+    try:
+        spec = json.loads(sys.argv[1])
+    except json.JSONDecodeError as e:
+        _fail(f"JSON parse error: {e}")
+    questions = spec.get("questions") if isinstance(spec, dict) else None
+    if not isinstance(questions, list) or not questions:
+        _fail("'questions' must be a non-empty array")
+
+    ASK_DIR.mkdir(parents=True, exist_ok=True)
+    reqid = uuid.uuid4().hex
+    req_path = ASK_DIR / f"{reqid}.req.json"
+    ans_path = ASK_DIR / f"{reqid}.ans.json"
+    # pid/cwd let muxdesk associate this question with the correct session via process ancestry
+    req = {
+        "reqid": reqid,
+        "pid": os.getpid(),
+        "cwd": os.getcwd(),
+        "ts": time.time(),
+        "questions": questions,
+    }
+    req_path.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")
+
+    deadline = time.time() + TIMEOUT_SEC
+    try:
+        while time.time() < deadline:
+            if ans_path.exists():
+                try:
+                    ans = json.loads(ans_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    time.sleep(POLL_SEC)  # partial write — retry next poll
+                    continue
+                print(_format_answer(ans, questions))
+                return
+            time.sleep(POLL_SEC)
+        print("(Question timed out: user did not answer within the time limit.)")
+    finally:
+        req_path.unlink(missing_ok=True)
+        ans_path.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    main()

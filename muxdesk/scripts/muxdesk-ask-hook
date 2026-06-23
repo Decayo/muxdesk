@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""PreToolUse hook: intercept AskUserQuestion → deny + redirect to muxdesk-ask.
+
+muxdesk runs an interactive tmux Claude session. AskUserQuestion is a TUI menu
+that the web user cannot see and cannot interact with conversationally.
+This hook matches tool_name == AskUserQuestion → returns permissionDecision: deny
+with a reason that redirects Claude to `muxdesk-ask` (structured question channel where
+the user answers via a web card and the answer is returned). The input schema of
+AskUserQuestion and muxdesk-ask are identical
+(questions[].question / header / multiSelect / options[].label / description),
+so the reason message includes the original questions payload and Claude can reuse
+it directly.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+
+def main() -> None:
+    try:
+        data = json.load(sys.stdin)
+    except Exception:  # noqa: BLE001 — if unreadable, pass through without blocking other tools
+        sys.exit(0)
+    if not isinstance(data, dict) or data.get("tool_name") != "AskUserQuestion":
+        sys.exit(0)
+
+    tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+    muxdesk_ask = os.path.join(os.path.dirname(os.path.abspath(__file__)), "muxdesk-ask")
+    payload = json.dumps(tool_input, ensure_ascii=False)
+    reason = (
+        "AskUserQuestion is disabled in the muxdesk environment — it is a TUI menu "
+        "that the web user cannot see or interact with.\n"
+        "Please use muxdesk-ask instead (structured question channel: the user selects / checks / "
+        "types in the muxdesk conversation card, and the answer is returned to you):\n"
+        f"  {muxdesk_ask} '{payload}'\n"
+        "(The schema is identical to AskUserQuestion, so you can reuse the questions above directly. "
+        "Multi-select, multi-question, and free-text answers are all supported. "
+        "muxdesk-ask blocks until the user answers and returns the answer as plain text.)"
+    )
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            },
+            ensure_ascii=False,
+        )
+    )
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

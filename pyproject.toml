@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "muxdesk"
+dynamic = ["version"]
+description = "Terminal-native AI agent cockpit — run AI CLIs in real tmux TTYs, rebuild conversations from transcript jsonl, and drive them from a web UI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Decayo" }]
+keywords = [
+    "claude",
+    "claude-code",
+    "tmux",
+    "ai-agent",
+    "agent",
+    "cockpit",
+    "terminal",
+    "transcript",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: User Interfaces",
+    "Topic :: Terminals",
+]
+# Core building blocks are pure-stdlib (only a `tmux`/`claude` binary at runtime).
+dependencies = []
+
+[project.optional-dependencies]
+# The generic cockpit server (create_app / `uvicorn muxdesk.app:app`).
+# jsonschema backs the agent-graph node I/O contracts (muxdesk.team).
+server = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "jsonschema>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Decayo/muxdesk"
+Repository = "https://github.com/Decayo/muxdesk"
+Issues = "https://github.com/Decayo/muxdesk/issues"
+
+[tool.hatch.version]
+path = "muxdesk/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["muxdesk"]
+# Ship the structured-ask channel scripts (no .py suffix → not picked up as modules).
+artifacts = ["muxdesk/scripts/*"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/muxdesk",
+    "/README.md",
+    "/REQUIREMENTS.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+]

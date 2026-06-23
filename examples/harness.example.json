@@ -1,0 +1,21 @@
+{
+  "_comment": "Quick-action bar above the chat. Copy to harness.json (or set env CC_HARNESS_CONFIG). Each action injects its `cmd` (a slash command or natural-language prompt) into the active claude session. groups[].accent=true uses the accent color. No harness.json -> the whole bar is hidden. Replace the generic examples below with your own project's commands.",
+  "groups": [
+    {
+      "name": "Workflow",
+      "accent": true,
+      "actions": [
+        { "label": "Plan", "cmd": "Outline a short plan before you start.", "hint": "Ask Claude to sketch an approach first" },
+        { "label": "Review", "cmd": "/review", "hint": "Run the review slash command" },
+        { "label": "Test", "cmd": "Run the test suite and report any failures.", "hint": "Natural-language prompt" }
+      ]
+    },
+    {
+      "name": "Quick",
+      "actions": [
+        { "label": "Status", "cmd": "Run git status and summarize what changed in one line.", "hint": "Repo status" },
+        { "label": "Explain", "cmd": "Explain what this project does in 3 bullets.", "hint": "Onboarding" }
+      ]
+    }
+  ]
+}

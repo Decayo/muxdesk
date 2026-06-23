@@ -1,0 +1,12 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# node
+node_modules/
+dist/
+# build / tmp
+*.tsbuildinfo
+.DS_Store
+/tmp/
