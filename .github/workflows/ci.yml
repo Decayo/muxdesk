@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (core + server + test)
+        run: pip install -e ".[server,test]"
+      - name: Compile
+        run: python -m py_compile muxdesk/*.py muxdesk/team/*.py
+      - name: Test
+        run: pytest -q
+      - name: Core stays zero-dependency
+        # Importing the core building blocks must not pull in FastAPI.
+        run: pip install -e . --no-deps && python -c "import muxdesk, sys; assert 'fastapi' not in sys.modules"

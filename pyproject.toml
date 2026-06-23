@@ -43,6 +43,9 @@ server = [
     "uvicorn[standard]>=0.30",
     "jsonschema>=4.0",
 ]
+test = [
+    "pytest>=8.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/Decayo/muxdesk"
@@ -65,3 +68,6 @@ include = [
     "/CONTRIBUTING.md",
     "/LICENSE",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
