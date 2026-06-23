@@ -1,8 +1,8 @@
 ## 1. Parser interface + Claude provider
 
-- [ ] 1.1 Create `muxdesk/parsers/__init__.py` and `muxdesk/parsers/base.py` defining the `Parser` interface (`parse_record(record) -> Iterator[dict]`, `extract_metadata(record) -> dict`)
-- [ ] 1.2 Move the current `transcript_parser` logic into `muxdesk/parsers/claude.py` as `ClaudeParser` (verbatim behavior: `_parse_block`, ignored types, sidechain flag, model/usage on assistant text)
-- [ ] 1.3 Repoint `muxdesk/transcript_parser.py` to a compatibility shim — module-level `parse_record` / `extract_metadata` delegate to a default `ClaudeParser`
+- [x] 1.1 Create `muxdesk/parsers/__init__.py` and `muxdesk/parsers/base.py` defining the `Parser` interface (`parse_record(record) -> Iterator[dict]`, `extract_metadata(record) -> dict`)
+- [x] 1.2 Move the current `transcript_parser` logic into `muxdesk/parsers/claude.py` as `ClaudeParser` (verbatim behavior: `_parse_block`, ignored types, sidechain flag, model/usage on assistant text)
+- [x] 1.3 Repoint `muxdesk/transcript_parser.py` to a compatibility shim — module-level `parse_record` / `extract_metadata` delegate to a default `ClaudeParser`
 
 ## 2. Fallback chain + pane provider
 

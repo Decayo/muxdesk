@@ -41,3 +41,12 @@ The module keeps `parse_record` / `extract_metadata` as module-level functions d
 - **Refactor regresses Claude parsing** → `ClaudeParser` is a verbatim move of today's logic; the existing `test_transcript_parser.py` suite is repointed at it and must stay green as the regression guard.
 - **Chain picks the wrong source** → availability check is conservative: jsonl must both exist and yield ≥1 parseable record before it is chosen; otherwise fall back.
 - **Scope creep into multi-provider** → bounded by Non-Goals: no second provider in this change; the interface is the deliverable.
+
+## Open Questions (surfaced during task-1 implementation)
+
+Task 1 (D1/D3 — provider abstraction + `ClaudeParser` + compatibility shim) landed cleanly with zero regression. Tasks 2.x (pane + chain) exposed two interface questions that must be settled before implementing them:
+
+- **PaneParser is session-level, not record-level.** `ClaudeParser.parse_record(record)` consumes one jsonl record; `PaneParser` consumes a whole `capture-pane` screen — there is no per-"record" unit, so the record-level `Parser` interface (D1) fits jsonl but not pane scrape. Options: (a) add a session-level `parse_source(...) -> Iterator[event]` to the interface, with `ClaudeParser` implementing it as tail-jsonl + `parse_record`; (b) keep `PaneParser` outside the `Parser` ABC and let `ParserChain` orchestrate the two shapes.
+- **ParserChain's real seat is `session_manager`.** The valuable degradation (jsonl file missing/corrupt → pane scrape) is a per-session source choice needing the jsonl path *and* the tmux pane — both owned by `session_manager`, not the pure parser layer. `ClaudeParser.parse_record` is already version-tolerant (never raises), so a record-level chain adds little. Decide whether `ParserChain` lives in `parsers/` operating on injected sources, or folds into `session_manager`'s read path.
+
+Deferred deliberately: revisit D2/D4 and re-scope tasks 2.x once the interface shape is chosen.
