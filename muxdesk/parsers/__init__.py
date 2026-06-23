@@ -6,6 +6,8 @@ composes them so a failed primary source degrades to a fallback rather than
 losing the conversation. See openspec change ``add-parser-multi-provider``.
 """
 from muxdesk.parsers.base import Parser
+from muxdesk.parsers.chain import ParserChain
 from muxdesk.parsers.claude import ClaudeParser
+from muxdesk.parsers.pane import PaneParser
 
-__all__ = ["Parser", "ClaudeParser"]
+__all__ = ["Parser", "ClaudeParser", "PaneParser", "ParserChain"]

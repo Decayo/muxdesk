@@ -6,9 +6,9 @@
 
 ## 2. Fallback chain + pane provider
 
-- [ ] 2.1 Implement `muxdesk/parsers/pane.py` `PaneParser`: rebuild coarse user/assistant events from `capture-pane` text (reuse live-preview sentinels), tag every event `degraded: true`
-- [ ] 2.2 Implement `muxdesk/parsers/chain.py` `ParserChain`: ordered providers + per-session availability check, degrade jsonl→pane, emit a one-time `parser_degraded` `system_notice`, never raise
-- [ ] 2.3 (Optional, non-breaking) let `session_manager` build a `ParserChain` for transcript reads so live sessions get the fallback
+- [x] 2.1 Implement `muxdesk/parsers/pane.py` `PaneParser`: rebuild coarse user/assistant events from `capture-pane` text (● assistant / > user sentinels), tag every event `degraded: true`
+- [x] 2.2 Implement `muxdesk/parsers/chain.py` `ParserChain`: source-agnostic `reconstruct(jsonl_records=?, pane_text=?)`, degrade jsonl→pane, emit a one-time `parser_degraded` `system_notice`, never raise
+- [ ] 2.3 (Deferred) let `session_manager` build a `ParserChain` for transcript reads — touches the live read path of a 29k core file used by the running standalone; taken only on concrete need (see design Resolution)
 
 ## 3. Public API + exports
 
