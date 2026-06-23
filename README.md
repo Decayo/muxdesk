@@ -105,6 +105,20 @@ capture_screen(sid, lines=40) -> str                          # TUI menu scrapin
 send_keys(sid, *keys) -> bool / type_text(sid, text) -> bool  # TUI interaction
 ```
 
+### Pluggable parsers (advanced)
+
+Transcript parsing lives in `muxdesk.parsers` — a provider abstraction with an antifragile fallback chain:
+
+- `Parser` — the interface (`parse_record` / `extract_metadata`).
+- `ClaudeParser` — the Claude Code jsonl provider (`parse_record` delegates to it).
+- `PaneParser` — a best-effort `capture-pane` scrape fallback (every event marked `degraded`).
+- `ParserChain` — `reconstruct(jsonl_records=?, pane_text=?)`: prefer jsonl, degrade to the pane scrape (with a `parser_degraded` notice) rather than losing the conversation.
+
+```python
+from muxdesk.parsers import ParserChain
+events = list(ParserChain().reconstruct(jsonl_records=records, pane_text=screen))
+```
+
 ## Architecture
 
 ```
