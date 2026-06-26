@@ -30,7 +30,9 @@ class ArtifactDetector:
         rel_path = self._relative_to_vault(file_path)
         if rel_path is None:
             return None
-        return {"rel_path": rel_path, "abs_path": file_path}
+        # Include the originating tool_use_id so consumers can dedupe replays without collapsing two
+        # genuine writes to the same path (the frontend keys artifact_written events by it).
+        return {"rel_path": rel_path, "abs_path": file_path, "tool_use_id": tool_id}
 
     def _relative_to_vault(self, file_path: str) -> str | None:
         try:
