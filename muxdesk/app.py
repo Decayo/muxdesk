@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
+from muxdesk.status import git_status  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
 from muxdesk.session_registry import SessionRegistry  # noqa: E402
 from muxdesk.team.team_manager import TeamManager  # noqa: E402
@@ -589,6 +590,20 @@ def resume_session(sid: str) -> dict | None:
 def probe_session(sid: str) -> dict:
     """Probe and recover a session (rate limit / dead -> retry / --resume revival). Includes orchestrators themselves."""
     return manager.probe_recover(sid)
+
+
+@app.get(f"{PREFIX}/sessions/{{sid}}/status")
+def session_status(sid: str) -> dict:
+    """Live status-bar segments: git branch/dirty + open shells (tmux panes)."""
+    record = manager.get(sid)
+    if not record:
+        return {"git": {"branch": None, "dirty": 0}, "shells": 0}
+    git = git_status(record.get("workspace_path"))
+    try:
+        shells = len(manager._driver.list_panes(record["tmux_session"]))
+    except Exception:  # noqa: BLE001 — best-effort; tmux session may be gone
+        shells = 0
+    return {"git": git, "shells": shells}
 
 
 # --- claude TUI interactive menus (/model, AskUserQuestion, etc.): capture-pane detection -> clickable in conversation ---
