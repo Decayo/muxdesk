@@ -1,4 +1,11 @@
-from muxdesk.bind import build_checkin, should_auto_deliver, validate_checkin, validate_contract, would_cycle
+from muxdesk.bind import (
+    build_checkin,
+    guardrail_decision,
+    should_auto_deliver,
+    validate_checkin,
+    validate_contract,
+    would_cycle,
+)
 
 _SCHEMA = {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}
 
@@ -115,6 +122,22 @@ def test_checkin_hook_settings_targets_checkin_by_claude():
     cmd = stop[0]["hooks"][0]["command"]
     assert "http://127.0.0.1:9999/api/muxdesk/checkin-by-claude" in cmd
     assert "--data-binary @-" in cmd  # forwards the hook stdin (carries the claude session_id)
+
+
+def test_guardrail_decision():
+    contract = {"guardrails": {"blocklist": ["git-push", "deploy", "delete"]}}
+    # no blocklist -> always allow
+    assert guardrail_decision({}, "Bash", {"command": "git push"}) == (True, "")
+    assert guardrail_decision(None, "Bash", {"command": "rm -rf /"}) == (True, "")
+    # blocked: "git-push" matches "git push" in the command
+    allowed, reason = guardrail_decision(contract, "Bash", {"command": "git push origin main"})
+    assert allowed is False and "git-push" in reason
+    # blocked by another entry
+    assert guardrail_decision(contract, "Bash", {"command": "make deploy"})[0] is False
+    # allowed: unrelated command
+    assert guardrail_decision(contract, "Bash", {"command": "ls -la"}) == (True, "")
+    # matches against tool name too
+    assert guardrail_decision({"guardrails": {"blocklist": ["WebFetch"]}}, "WebFetch", {"url": "x"})[0] is False
 
 
 def test_should_auto_deliver_respects_cadence():

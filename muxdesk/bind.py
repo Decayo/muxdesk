@@ -75,6 +75,33 @@ def should_auto_deliver(contract: dict | None) -> bool:
     return cadence != "manual"
 
 
+def _flatten_input(tool_input: object) -> str:
+    """Searchable text from a tool input (command / file_path / pattern / url …)."""
+    if isinstance(tool_input, str):
+        return tool_input
+    if isinstance(tool_input, dict):
+        return " ".join(str(v) for v in tool_input.values() if isinstance(v, (str, int, float)))
+    return ""
+
+
+def guardrail_decision(contract: dict | None, tool_name: str, tool_input: object) -> tuple[bool, str]:
+    """Allow/deny a tool call under the contract's guardrails.blocklist. Returns (allowed, reason).
+
+    A blocklist entry matches when its words (e.g. "git-push" -> "git push") appear in the tool name
+    or input text — a forgiving heuristic so entries like "git-push" / "deploy" / "delete" catch the
+    obvious cases without the caller writing regexes.
+    """
+    blocklist = ((contract or {}).get("guardrails") or {}).get("blocklist") or []
+    if not blocklist:
+        return True, ""
+    haystack = f"{tool_name} {_flatten_input(tool_input)}".lower()
+    for entry in blocklist:
+        needle = str(entry).lower().replace("-", " ").strip()
+        if needle and needle in haystack:
+            return False, f"blocked by bind-contract guardrail: {entry}"
+    return True, ""
+
+
 def build_checkin(record: dict, body: dict | None) -> tuple[str | None, dict, dict]:
     """Validate a child's check-in against its own contract.
 

@@ -27,6 +27,7 @@ from muxdesk.bind import (  # noqa: E402
     build_checkin,
     checkin_hook_settings,
     extract_transcript_checkin,
+    guardrail_decision,
     should_auto_deliver,
     validate_contract,
     would_cycle,
@@ -674,6 +675,20 @@ def checkin_by_claude(body: dict = Body(default={})) -> dict:
     if deliver:
         bus.publish(parent, "child_checkin", payload)
     return {**result, "matched": True, "delivered_to_parent": deliver}
+
+
+@app.post(f"{PREFIX}/guardrail-check-by-claude")
+def guardrail_check_by_claude(body: dict = Body(default={})) -> dict:
+    """PreToolUse-hook entry: allow/deny a tool call against the session's bind-contract guardrails.
+    Unbound / unknown sessions always allow (fast path). Module 4 · 4d."""
+    claude_id = (body or {}).get("session_id")
+    if not claude_id:
+        raise HTTPException(status_code=422, detail="session_id is required")
+    record = registry.get_by_claude_session_id(str(claude_id))
+    if not record:
+        return {"allow": True}
+    allowed, reason = guardrail_decision(record.get("bind_contract"), (body or {}).get("tool_name", ""), (body or {}).get("tool_input"))
+    return {"allow": allowed, "reason": reason}
 
 
 # --- claude TUI interactive menus (/model, AskUserQuestion, etc.): capture-pane detection -> clickable in conversation ---
