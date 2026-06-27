@@ -23,7 +23,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from muxdesk.bind import build_checkin, extract_transcript_checkin, validate_contract, would_cycle  # noqa: E402
+from muxdesk.bind import build_checkin, checkin_hook_settings, extract_transcript_checkin, validate_contract, would_cycle  # noqa: E402
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
 from muxdesk.session_registry import SessionRegistry  # noqa: E402
@@ -67,6 +67,9 @@ app.add_middleware(
 )
 
 PREFIX = "/api/muxdesk"
+
+# Self URL hooks call back to (Stop -> /checkin-by-claude). Override per-deploy with MUXDESK_SELF_URL.
+_SELF_URL = os.environ.get("MUXDESK_SELF_URL", "http://127.0.0.1:8001")
 
 _REPO = os.path.dirname(os.path.abspath(__file__))  # Repo root; passed via --add-dir + absolute paths for muxdesk-ask/hook
 
@@ -288,7 +291,7 @@ def create_lead(body: dict = Body(default={})) -> dict:
         model=model,
         title="orchestrator",
         system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
-        extra_settings=_merge_settings(_team_hook_settings(), _ask_hook_settings()),
+        extra_settings=_merge_settings(_team_hook_settings(), _ask_hook_settings(), checkin_hook_settings(_SELF_URL)),
         add_dirs=[_REPO],  # Include muxdesk-ask skill (question-asking conventions)
     )
 
@@ -546,7 +549,8 @@ def create_session(body: dict = Body(default={})) -> dict:
         workspace_path=body.get("workspace_path"),
         model=body.get("model"),
         title=body.get("title"),
-        extra_settings=_ask_hook_settings(),  # Regular sessions also intercept AskUserQuestion -> muxdesk-ask
+        # AskUserQuestion -> muxdesk-ask; + a Stop hook so the session can report check-ins once it's bound
+        extra_settings=_merge_settings(_ask_hook_settings(), checkin_hook_settings(_SELF_URL)),
         system_prompt=BASE_SYSTEM_PROMPT,  # Question-asking rules: run muxdesk-ask directly via Bash, skip misbinding indirection
         add_dirs=[_REPO],  # Include muxdesk-ask skill (question-asking conventions, as documentation)
     )

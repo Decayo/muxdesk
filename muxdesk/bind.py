@@ -98,6 +98,17 @@ def would_cycle(get_parent: Callable[[str], str | None], sid: str, new_parent: s
     return True  # chain too deep -> treat as a cycle defensively
 
 
+def checkin_hook_settings(base: str) -> dict:
+    """Static Stop-hook `--settings`: POST the hook payload (carries the claude session_id) to
+    checkin-by-claude. Added to every session at creation; the backend no-ops for unbound sessions."""
+    url = f"{base}/api/muxdesk/checkin-by-claude"
+    cmd = (
+        f"curl -sS -X POST {url} -H 'Content-Type: application/json' --data-binary @- "
+        f"--max-time 2 >/dev/null 2>>/tmp/muxdesk-hook-err.log || true"
+    )
+    return {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": cmd}]}]}}
+
+
 def _assistant_text(content: object) -> str:
     """Flatten a message `content` (str or list of blocks) to its text."""
     if isinstance(content, str):

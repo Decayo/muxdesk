@@ -108,6 +108,15 @@ def test_extract_transcript_checkin_missing_file():
     assert extract_transcript_checkin("/no/such/file.jsonl") == {"summary": "", "output": {}}
 
 
+def test_checkin_hook_settings_targets_checkin_by_claude():
+    from muxdesk.bind import checkin_hook_settings
+
+    stop = checkin_hook_settings("http://127.0.0.1:9999")["hooks"]["Stop"]
+    cmd = stop[0]["hooks"][0]["command"]
+    assert "http://127.0.0.1:9999/api/muxdesk/checkin-by-claude" in cmd
+    assert "--data-binary @-" in cmd  # forwards the hook stdin (carries the claude session_id)
+
+
 def test_would_cycle():
     parents = {"c": "b", "b": "a", "a": None}
     get = parents.get
