@@ -130,6 +130,35 @@ def guardrail_decision(contract: dict | None, tool_name: str, tool_input: object
     return True, ""
 
 
+def bind_briefing(contract: dict | None) -> str | None:
+    """A message relayed to a child on (contract) bind so it knows its role: mission, how/when to
+    report, and which actions are blocked. Returns None for an ephemeral bind (no contract)."""
+    if not contract:
+        return None
+    lines = ["【muxdesk bind】You are now bound as a child session under a parent."]
+    mission = contract.get("mission")
+    if mission:
+        lines.append(f"Mission: {mission}")
+    cadence = (contract.get("checkin") or {}).get("cadence", "on_stop")
+    schema = (contract.get("deliverables") or {}).get("output_schema")
+    if cadence == "manual":
+        lines.append("Report progress only when explicitly asked (manual check-in cadence).")
+    elif schema:
+        lines.append(
+            "At each turn's end, include a fenced ```json block matching this schema — it is validated "
+            f"and reported to the parent automatically:\n{json.dumps(schema, ensure_ascii=False)}"
+        )
+    else:
+        lines.append(
+            "At each turn's end, optionally include a fenced ```json block summarizing progress; "
+            "it is reported to the parent automatically."
+        )
+    blocklist = (contract.get("guardrails") or {}).get("blocklist")
+    if blocklist:
+        lines.append(f"Guardrails — these actions are blocked for you and will be denied: {', '.join(map(str, blocklist))}.")
+    return "\n".join(lines)
+
+
 def build_checkin(record: dict, body: dict | None) -> tuple[str | None, dict, dict]:
     """Validate a child's check-in against its own contract.
 

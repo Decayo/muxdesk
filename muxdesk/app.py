@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from muxdesk.bind import (  # noqa: E402
+    bind_briefing,
     build_checkin,
     checkin_hook_settings,
     clear_guardrail_marker,
@@ -641,6 +642,10 @@ def bind_session(sid: str, body: dict = Body(default={})) -> dict | None:
     registry.update(sid, **fields)
     # mirror the blocklist to the guardrail marker the PreToolUse hook reads (cleared if none / unbound)
     write_guardrail_marker(_GUARDRAILS_DIR, record.get("claude_session_id"), contract)
+    # brief the child on its role (mission / reporting / guardrails) — relay works on a running session
+    briefing = bind_briefing(contract)
+    if briefing:
+        manager.submit_user_message(sid, briefing)
     return manager.get(sid)
 
 

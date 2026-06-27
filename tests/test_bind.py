@@ -1,4 +1,5 @@
 from muxdesk.bind import (
+    bind_briefing,
     build_checkin,
     guardrail_decision,
     should_auto_deliver,
@@ -140,6 +141,27 @@ def test_checkin_hook_settings_targets_checkin_by_claude():
     cmd = stop[0]["hooks"][0]["command"]
     assert "http://127.0.0.1:9999/api/muxdesk/checkin-by-claude" in cmd
     assert "--data-binary @-" in cmd  # forwards the hook stdin (carries the claude session_id)
+
+
+def test_bind_briefing():
+    assert bind_briefing(None) is None  # ephemeral -> no briefing
+    full = bind_briefing(
+        {
+            "mission": "review PRs",
+            "deliverables": {"output_schema": _SCHEMA},
+            "checkin": {"cadence": "on_stop"},
+            "guardrails": {"blocklist": ["git-push", "deploy"]},
+        }
+    )
+    assert "Mission: review PRs" in full
+    assert "```json" in full and "schema" in full.lower()
+    assert "git-push" in full and "deploy" in full
+
+
+def test_bind_briefing_manual_cadence_skips_schema_instruction():
+    msg = bind_briefing({"mission": "x", "checkin": {"cadence": "manual"}, "deliverables": {"output_schema": _SCHEMA}})
+    assert "only when explicitly asked" in msg
+    assert "```json" not in msg
 
 
 def test_guardrail_decision():
