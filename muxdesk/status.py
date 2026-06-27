@@ -34,9 +34,17 @@ def git_status(workspace_path: str | None) -> dict:
     return {"branch": branch, "dirty": dirty}
 
 
+def _as_int(value: object) -> int:
+    """Coerce a transcript usage value to int; 0 on anything non-numeric (the jsonl schema is external)."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def context_window(model: str | None) -> int:
     """Context window in tokens for a model id; `[1m]` suffix -> 1M, otherwise 200k."""
-    if model and "[1m]" in model.lower():
+    if isinstance(model, str) and "[1m]" in model.lower():
         return _EXTENDED_WINDOW
     return _DEFAULT_WINDOW
 
@@ -62,11 +70,12 @@ def context_usage(transcript_path: str | None, model: str | None = None) -> dict
                 message = record.get("message")
                 if not isinstance(message, dict):
                     continue
-                if message.get("model"):
-                    seen_model = message["model"]
+                model_field = message.get("model")
+                if isinstance(model_field, str) and model_field:
+                    seen_model = model_field
                 usage = message.get("usage")
                 if isinstance(usage, dict):
-                    total = sum(int(usage.get(k) or 0) for k in _USAGE_KEYS)
+                    total = sum(_as_int(usage.get(k)) for k in _USAGE_KEYS)
                     peak = max(peak, total)
     except OSError:
         return None

@@ -47,6 +47,17 @@ def test_counts_dirty_files(tmp_path):
     assert status["dirty"] == 2
 
 
+def test_detached_head_reports_short_sha(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _git(repo, "checkout", "-q", "--detach", "HEAD")  # detach at the current commit
+    status = git_status(str(repo))
+    # detached HEAD -> "(<short-sha>)", not the literal "HEAD"
+    assert status["branch"] != "HEAD"
+    assert status["branch"].startswith("(") and status["branch"].endswith(")")
+    assert status["dirty"] == 0
+
+
 @pytest.mark.skipif(subprocess.run(["which", "git"], capture_output=True).returncode != 0, reason="git not installed")
 def test_smoke_requires_git():
     # guards the suite if a runner lacks git
@@ -91,3 +102,31 @@ def test_context_usage_missing_or_empty(tmp_path):
     empty = tmp_path / "e.jsonl"
     empty.write_text("not json\n{}\n", encoding="utf-8")
     assert context_usage(str(empty)) is None
+
+
+def test_context_usage_falls_back_to_passed_model_for_window(tmp_path):
+    # transcript carries usage but no model field -> the registry `model` arg sizes the window
+    t = tmp_path / "t.jsonl"
+    _write_transcript(t, [(None, {"input_tokens": 300_000, "output_tokens": 0})])
+    assert context_usage(str(t), model="claude-opus-4-8[1m]") == {"peak": 300_000, "window": 1_000_000, "pct": 30}
+
+
+def test_context_usage_tolerates_garbage_usage_values(tmp_path):
+    # the transcript jsonl schema is external/fragile — non-numeric usage values must not crash,
+    # they coerce to 0 (a turn with garbage shouldn't poison a later valid turn's peak)
+    t = tmp_path / "t.jsonl"
+    _write_transcript(
+        t,
+        [
+            ("claude-sonnet-4-6", {"input_tokens": "lots", "output_tokens": [1, 2], "cache_read_input_tokens": None}),
+            ("claude-sonnet-4-6", {"input_tokens": 2000, "output_tokens": 0}),
+        ],
+    )
+    assert context_usage(str(t)) == {"peak": 2000, "window": 200_000, "pct": 1}
+
+
+def test_context_usage_tolerates_non_string_model_field(tmp_path):
+    # a non-string model in the transcript must not crash context_window's `.lower()`
+    t = tmp_path / "t.jsonl"
+    _write_transcript(t, [(12345, {"input_tokens": 2000, "output_tokens": 0})])
+    assert context_usage(str(t)) == {"peak": 2000, "window": 200_000, "pct": 1}
