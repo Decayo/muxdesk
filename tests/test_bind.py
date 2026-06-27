@@ -1,4 +1,4 @@
-from muxdesk.bind import validate_checkin, validate_contract, would_cycle
+from muxdesk.bind import build_checkin, validate_checkin, validate_contract, would_cycle
 
 _SCHEMA = {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}
 
@@ -46,6 +46,34 @@ def test_validate_checkin_against_output_schema():
 
 def test_validate_checkin_no_schema_passes():
     assert validate_checkin({}, {"anything": 1}) == (True, [])
+
+
+def test_build_checkin_valid_with_parent():
+    record = {
+        "app_session_id": "child",
+        "parent_session_id": "parent",
+        "bind_contract": {"deliverables": {"output_schema": _SCHEMA}},
+    }
+    parent, payload, result = build_checkin(record, {"summary": "ok note", "output": {"summary": "done"}})
+    assert parent == "parent"
+    assert result == {"ok": True, "errors": []}
+    assert payload["child_session_id"] == "child"
+    assert payload["summary"] == "ok note"
+    assert payload["output"] == {"summary": "done"}
+
+
+def test_build_checkin_invalid_output_reports_errors():
+    record = {"app_session_id": "c", "parent_session_id": "p", "bind_contract": {"deliverables": {"output_schema": _SCHEMA}}}
+    parent, payload, result = build_checkin(record, {"output": {"nope": 1}})
+    assert parent == "p"
+    assert result["ok"] is False and result["errors"]
+    assert payload["ok"] is False
+
+
+def test_build_checkin_no_parent_no_contract():
+    parent, payload, result = build_checkin({"app_session_id": "lone"}, {"output": {"x": 1}})
+    assert parent is None
+    assert result == {"ok": True, "errors": []}  # no schema -> passes
 
 
 def test_would_cycle():

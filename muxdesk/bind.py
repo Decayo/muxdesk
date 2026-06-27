@@ -59,6 +59,25 @@ def validate_checkin(contract: dict | None, output: dict) -> tuple[bool, list[st
     return _validate(schema, output)
 
 
+def build_checkin(record: dict, body: dict | None) -> tuple[str | None, dict, dict]:
+    """Validate a child's check-in against its own contract.
+
+    Returns (parent_session_id, event_payload, result). The payload is what gets published to the
+    parent's event bus; result is what the check-in endpoint returns to the child.
+    """
+    body = body or {}
+    output = body.get("output") or {}
+    ok, errors = validate_checkin(record.get("bind_contract"), output)
+    payload = {
+        "child_session_id": record.get("app_session_id"),
+        "summary": body.get("summary"),
+        "output": output,
+        "ok": ok,
+        "errors": errors,
+    }
+    return record.get("parent_session_id"), payload, {"ok": ok, "errors": errors}
+
+
 def would_cycle(get_parent: Callable[[str], str | None], sid: str, new_parent: str, max_hops: int = 50) -> bool:
     """True if binding `sid` under `new_parent` would form a cycle (sid is, or is an ancestor of, new_parent)."""
     if new_parent == sid:

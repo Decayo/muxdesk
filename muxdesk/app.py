@@ -23,7 +23,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from muxdesk.bind import validate_contract, would_cycle  # noqa: E402
+from muxdesk.bind import build_checkin, validate_contract, would_cycle  # noqa: E402
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
 from muxdesk.session_registry import SessionRegistry  # noqa: E402
@@ -632,6 +632,18 @@ def relay_to_session(sid: str, body: dict = Body(default={})) -> dict:
     if not isinstance(text, str) or not text.strip():
         raise HTTPException(status_code=422, detail="text is required")
     return {"ok": bool(manager.submit_user_message(sid, text))}
+
+
+@app.post(f"{PREFIX}/sessions/{{sid}}/checkin")
+def session_checkin(sid: str, body: dict = Body(default={})) -> dict:
+    """Child -> parent: report a check-in; validate against the contract, push to the parent's bus. Module 4 · 4c."""
+    record = manager.get(sid)
+    if not record:
+        raise HTTPException(status_code=404, detail="session not found")
+    parent, payload, result = build_checkin(record, body)
+    if parent:
+        bus.publish(parent, "child_checkin", payload)
+    return {**result, "delivered_to_parent": bool(parent)}
 
 
 # --- claude TUI interactive menus (/model, AskUserQuestion, etc.): capture-pane detection -> clickable in conversation ---
