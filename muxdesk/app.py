@@ -23,7 +23,14 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from muxdesk.bind import build_checkin, checkin_hook_settings, extract_transcript_checkin, validate_contract, would_cycle  # noqa: E402
+from muxdesk.bind import (  # noqa: E402
+    build_checkin,
+    checkin_hook_settings,
+    extract_transcript_checkin,
+    should_auto_deliver,
+    validate_contract,
+    would_cycle,
+)
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
 from muxdesk.session_registry import SessionRegistry  # noqa: E402
@@ -662,9 +669,11 @@ def checkin_by_claude(body: dict = Body(default={})) -> dict:
         return {"ok": True, "matched": False, "delivered_to_parent": False}
     checkin_body = extract_transcript_checkin(record.get("transcript_path"))
     parent, payload, result = build_checkin(record, checkin_body)
-    if parent:
+    # cadence gate: a 'manual' contract suppresses the automatic Stop-hook delivery.
+    deliver = bool(parent) and should_auto_deliver(record.get("bind_contract"))
+    if deliver:
         bus.publish(parent, "child_checkin", payload)
-    return {**result, "matched": True, "delivered_to_parent": bool(parent)}
+    return {**result, "matched": True, "delivered_to_parent": deliver}
 
 
 # --- claude TUI interactive menus (/model, AskUserQuestion, etc.): capture-pane detection -> clickable in conversation ---

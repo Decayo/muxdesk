@@ -65,6 +65,16 @@ def validate_checkin(contract: dict | None, output: dict) -> tuple[bool, list[st
     return _validate(schema, output)
 
 
+def should_auto_deliver(contract: dict | None) -> bool:
+    """Whether an automatic (Stop-hook) check-in should be delivered.
+
+    `checkin.cadence: manual` suppresses auto delivery (the child/user triggers check-ins
+    explicitly via /checkin); on_stop / every_turn / unset all deliver on each Stop.
+    """
+    cadence = ((contract or {}).get("checkin") or {}).get("cadence")
+    return cadence != "manual"
+
+
 def build_checkin(record: dict, body: dict | None) -> tuple[str | None, dict, dict]:
     """Validate a child's check-in against its own contract.
 

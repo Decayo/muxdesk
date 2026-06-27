@@ -22,4 +22,4 @@
 ## Follow-ups (not in this change)
 - [ ] A `muxdesk-bind` skill so the child writes contract-shaped output deliberately (beyond the transcript-tail default).
 - [ ] End-to-end integration test (needs `httpx` + a probe-loop-free app fixture).
-- [ ] Per-cadence delivery (`checkin.cadence`: every_turn vs on_stop vs manual) — currently every Stop fires.
+- [x] Cadence gate: `checkin.cadence: manual` suppresses the auto Stop-hook delivery (on_stop / every_turn deliver per turn; finer every_turn-vs-on_stop timing is a non-goal for a Stop trigger).

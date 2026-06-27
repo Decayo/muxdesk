@@ -1,4 +1,4 @@
-from muxdesk.bind import build_checkin, validate_checkin, validate_contract, would_cycle
+from muxdesk.bind import build_checkin, should_auto_deliver, validate_checkin, validate_contract, would_cycle
 
 _SCHEMA = {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}
 
@@ -115,6 +115,14 @@ def test_checkin_hook_settings_targets_checkin_by_claude():
     cmd = stop[0]["hooks"][0]["command"]
     assert "http://127.0.0.1:9999/api/muxdesk/checkin-by-claude" in cmd
     assert "--data-binary @-" in cmd  # forwards the hook stdin (carries the claude session_id)
+
+
+def test_should_auto_deliver_respects_cadence():
+    assert should_auto_deliver(None) is True
+    assert should_auto_deliver({}) is True
+    assert should_auto_deliver({"checkin": {"cadence": "on_stop"}}) is True
+    assert should_auto_deliver({"checkin": {"cadence": "every_turn"}}) is True
+    assert should_auto_deliver({"checkin": {"cadence": "manual"}}) is False
 
 
 def test_would_cycle():
