@@ -76,6 +76,38 @@ def test_build_checkin_no_parent_no_contract():
     assert result == {"ok": True, "errors": []}  # no schema -> passes
 
 
+def test_extract_transcript_checkin(tmp_path):
+    from muxdesk.bind import extract_transcript_checkin
+    import json as _json
+
+    t = tmp_path / "t.jsonl"
+    lines = [
+        {"message": {"role": "user", "content": "go"}},
+        {"message": {"role": "assistant", "content": [{"type": "text", "text": "working…"}]}},
+        {"message": {"role": "assistant", "content": "done. ```json\n{\"summary\": \"ok\"}\n```"}},
+    ]
+    t.write_text("\n".join(_json.dumps(x) for x in lines), encoding="utf-8")
+    result = extract_transcript_checkin(str(t))
+    assert result["output"] == {"summary": "ok"}
+    assert "done." in result["summary"]
+
+
+def test_extract_transcript_checkin_no_json(tmp_path):
+    from muxdesk.bind import extract_transcript_checkin
+    import json as _json
+
+    t = tmp_path / "t.jsonl"
+    t.write_text(_json.dumps({"message": {"role": "assistant", "content": "just prose"}}), encoding="utf-8")
+    assert extract_transcript_checkin(str(t)) == {"summary": "just prose", "output": {}}
+
+
+def test_extract_transcript_checkin_missing_file():
+    from muxdesk.bind import extract_transcript_checkin
+
+    assert extract_transcript_checkin(None) == {"summary": "", "output": {}}
+    assert extract_transcript_checkin("/no/such/file.jsonl") == {"summary": "", "output": {}}
+
+
 def test_would_cycle():
     parents = {"c": "b", "b": "a", "a": None}
     get = parents.get

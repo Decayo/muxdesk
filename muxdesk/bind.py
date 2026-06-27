@@ -10,6 +10,8 @@ An ephemeral bind may carry no contract (None / {}).
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Callable
 
 import jsonschema
@@ -18,6 +20,10 @@ from muxdesk.team.contract import _validate
 
 BIND_CADENCES = frozenset({"on_stop", "every_turn", "manual"})
 BIND_KINDS = frozenset({"persistent", "ephemeral"})
+
+# Last fenced json/object block in an assistant message -> the structured check-in `output`.
+_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_SUMMARY_MAX = 500
 
 
 def validate_contract(contract: dict | None) -> tuple[bool, list[str]]:
@@ -90,3 +96,55 @@ def would_cycle(get_parent: Callable[[str], str | None], sid: str, new_parent: s
         if cur == sid:
             return True
     return True  # chain too deep -> treat as a cycle defensively
+
+
+def _assistant_text(content: object) -> str:
+    """Flatten a message `content` (str or list of blocks) to its text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
+def extract_transcript_checkin(transcript_path: str | None) -> dict:
+    """Build a check-in body from a transcript tail: {summary, output}.
+
+    summary = the last assistant message text (trimmed); output = the last fenced ```json block in
+    that message (the child's structured deliverable), or {} if none. Best-effort, never raises.
+    """
+    if not transcript_path:
+        return {"summary": "", "output": {}}
+    try:
+        with open(transcript_path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return {"summary": "", "output": {}}
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = record.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        text = _assistant_text(message.get("content")).strip()
+        if not text:
+            continue
+        output: dict = {}
+        match = _FENCED_JSON_RE.search(text)
+        if match:
+            try:
+                parsed = json.loads(match.group(1))
+                if isinstance(parsed, dict):
+                    output = parsed
+            except json.JSONDecodeError:
+                pass
+        return {"summary": text[:_SUMMARY_MAX], "output": output}
+    return {"summary": "", "output": {}}

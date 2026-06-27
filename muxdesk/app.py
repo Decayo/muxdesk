@@ -23,7 +23,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from muxdesk.bind import build_checkin, validate_contract, would_cycle  # noqa: E402
+from muxdesk.bind import build_checkin, extract_transcript_checkin, validate_contract, would_cycle  # noqa: E402
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
 from muxdesk.session_registry import SessionRegistry  # noqa: E402
@@ -644,6 +644,23 @@ def session_checkin(sid: str, body: dict = Body(default={})) -> dict:
     if parent:
         bus.publish(parent, "child_checkin", payload)
     return {**result, "delivered_to_parent": bool(parent)}
+
+
+@app.post(f"{PREFIX}/checkin-by-claude")
+def checkin_by_claude(body: dict = Body(default={})) -> dict:
+    """Stop-hook entry: map the claude session id to its muxdesk session, build a check-in from the
+    transcript tail, validate, and push to the parent's bus. No-ops cleanly for unbound sessions. Module 4 · 4c."""
+    claude_id = (body or {}).get("session_id")
+    if not claude_id:
+        raise HTTPException(status_code=422, detail="session_id is required")
+    record = registry.get_by_claude_session_id(str(claude_id))
+    if not record:
+        return {"ok": True, "matched": False, "delivered_to_parent": False}
+    checkin_body = extract_transcript_checkin(record.get("transcript_path"))
+    parent, payload, result = build_checkin(record, checkin_body)
+    if parent:
+        bus.publish(parent, "child_checkin", payload)
+    return {**result, "matched": True, "delivered_to_parent": bool(parent)}
 
 
 # --- claude TUI interactive menus (/model, AskUserQuestion, etc.): capture-pane detection -> clickable in conversation ---
