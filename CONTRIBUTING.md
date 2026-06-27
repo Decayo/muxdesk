@@ -35,8 +35,10 @@ Requirements: `tmux`, `claude` (logged in), Python 3.11+, Node 20+.
 
 ## Checks before a PR
 
-- Backend: `python3 -m py_compile muxdesk/*.py muxdesk/team/*.py` must succeed; `ruff check muxdesk/` if you have ruff.
-- Frontend: `cd muxdesk-web && npm run build` (runs `tsc` + vite build).
+These mirror what CI runs (see each repo's `.github/workflows/ci.yml`):
+
+- Backend: `pip install -e ".[server,test,lint]"`, then `ruff check muxdesk tests` + `pytest -q` (plus `py_compile` of `muxdesk/*.py muxdesk/team/*.py`).
+- Frontend: `cd muxdesk-web && npm run lint && npm test && npm run build` (ESLint + vitest + `tsc` + vite build).
 - **API contract**: any change to `/api/muxdesk` routes or the `/tmp/muxdesk-*` exchange paths must land in **both** repos together — the frontend detects those paths/strings by convention.
 
 ## Things that are fragile (be careful)
