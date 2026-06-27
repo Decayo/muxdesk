@@ -23,6 +23,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from muxdesk.bind import validate_contract, would_cycle  # noqa: E402
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
 from muxdesk.session_registry import SessionRegistry  # noqa: E402
@@ -589,6 +590,48 @@ def resume_session(sid: str) -> dict | None:
 def probe_session(sid: str) -> dict:
     """Probe and recover a session (rate limit / dead -> retry / --resume revival). Includes orchestrators themselves."""
     return manager.probe_recover(sid)
+
+
+@app.post(f"{PREFIX}/sessions/{{sid}}/bind")
+def bind_session(sid: str, body: dict = Body(default={})) -> dict | None:
+    """Bind a session under a parent (tree) with an optional contract. Module 4 · 4b."""
+    if not manager.get(sid):
+        raise HTTPException(status_code=404, detail="session not found")
+    parent = body.get("parent_session_id")
+    contract = body.get("contract")
+    ok, errors = validate_contract(contract)
+    if not ok:
+        raise HTTPException(status_code=422, detail={"errors": errors})
+    if parent:
+        if not manager.get(parent):
+            raise HTTPException(status_code=404, detail="parent session not found")
+        if would_cycle(lambda i: (manager.get(i) or {}).get("parent_session_id"), sid, parent):
+            raise HTTPException(status_code=409, detail="bind would create a cycle")
+    fields = {"parent_session_id": parent, "bind_contract": contract}
+    if body.get("project"):
+        fields["project"] = body["project"]
+    registry.update(sid, **fields)
+    return manager.get(sid)
+
+
+@app.post(f"{PREFIX}/sessions/{{sid}}/unbind")
+def unbind_session(sid: str) -> dict | None:
+    """Detach a session from its parent and clear its contract. Module 4 · 4b."""
+    if not manager.get(sid):
+        raise HTTPException(status_code=404, detail="session not found")
+    registry.update(sid, parent_session_id=None, bind_contract=None)
+    return manager.get(sid)
+
+
+@app.post(f"{PREFIX}/sessions/{{sid}}/relay")
+def relay_to_session(sid: str, body: dict = Body(default={})) -> dict:
+    """Parent -> child: inject a message into the bound session. Module 4 · 4d."""
+    if not manager.get(sid):
+        raise HTTPException(status_code=404, detail="session not found")
+    text = (body or {}).get("text", "")
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=422, detail="text is required")
+    return {"ok": bool(manager.submit_user_message(sid, text))}
 
 
 # --- claude TUI interactive menus (/model, AskUserQuestion, etc.): capture-pane detection -> clickable in conversation ---
