@@ -642,10 +642,14 @@ def bind_session(sid: str, body: dict = Body(default={})) -> dict | None:
     registry.update(sid, **fields)
     # mirror the blocklist to the guardrail marker the PreToolUse hook reads (cleared if none / unbound)
     write_guardrail_marker(_GUARDRAILS_DIR, record.get("claude_session_id"), contract)
-    # brief the child on its role (mission / reporting / guardrails) — relay works on a running session
+    # brief the child on its role (mission / reporting / guardrails) — best-effort relay (a failed
+    # briefing must not fail the bind itself, e.g. if the session's pane is momentarily unavailable)
     briefing = bind_briefing(contract)
     if briefing:
-        manager.submit_user_message(sid, briefing)
+        try:
+            manager.submit_user_message(sid, briefing)
+        except Exception:  # noqa: BLE001
+            pass
     return manager.get(sid)
 
 
