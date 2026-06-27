@@ -15,7 +15,9 @@ _HINT_MAX = 120
 def _read_hint(md_path: Path) -> str:
     """Best-effort one-line hint: frontmatter `description:`, else first prose line."""
     try:
-        text = md_path.read_text(encoding="utf-8")
+        # errors="replace": user .claude files may not be UTF-8 — a hint is best-effort, never a crash
+        # (UnicodeDecodeError is a ValueError, not an OSError, so it would otherwise escape this guard).
+        text = md_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
     body = text
@@ -46,6 +48,8 @@ def discover_commands(workspace_path: str | None, home: Path | None = None) -> l
         cmd_dir = root / "commands"
         if cmd_dir.is_dir():
             for f in sorted(cmd_dir.glob("*.md")):
+                if not f.is_file():  # a directory named "*.md" would otherwise read as an empty-hint entry
+                    continue
                 by_name[f.stem] = {"name": f.stem, "hint": _read_hint(f), "source": "command", "scope": scope}
         skill_dir = root / "skills"
         if skill_dir.is_dir():

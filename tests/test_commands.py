@@ -41,3 +41,21 @@ def test_results_sorted_by_name(tmp_path):
         _write(home / ".claude" / "commands" / f"{n}.md", f"{n} cmd\n")
     names = [i["name"] for i in discover_commands(workspace_path=None, home=home)]
     assert names == ["alpha", "mid", "zeta"]
+
+
+def test_non_utf8_command_file_does_not_crash(tmp_path):
+    # user .claude files may not be UTF-8 — discovery must survive (UnicodeDecodeError is a ValueError)
+    home = tmp_path / "home"
+    bad = home / ".claude" / "commands" / "legacy.md"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_bytes(b"\xff\xfe caf\xe9 latin1 hint\n")  # invalid utf-8
+    items = discover_commands(workspace_path=None, home=home)
+    assert [i["name"] for i in items] == ["legacy"]  # listed, hint best-effort, no crash
+
+
+def test_directory_named_like_md_is_skipped(tmp_path):
+    home = tmp_path / "home"
+    _write(home / ".claude" / "commands" / "real.md", "real cmd\n")
+    (home / ".claude" / "commands" / "weird.md").mkdir(parents=True)  # a dir matching *.md
+    names = [i["name"] for i in discover_commands(workspace_path=None, home=home)]
+    assert names == ["real"]
