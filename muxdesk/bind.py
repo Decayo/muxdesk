@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Callable
 
 import jsonschema
@@ -82,6 +83,33 @@ def _flatten_input(tool_input: object) -> str:
     if isinstance(tool_input, dict):
         return " ".join(str(v) for v in tool_input.values() if isinstance(v, (str, int, float)))
     return ""
+
+
+def guardrail_marker_path(marker_dir: str, claude_session_id: str) -> Path:
+    return Path(marker_dir) / f"{claude_session_id}.json"
+
+
+def write_guardrail_marker(marker_dir: str, claude_session_id: str | None, contract: dict | None) -> None:
+    """Persist a session's blocklist so the PreToolUse hook can enforce it locally (no HTTP per tool).
+    Writes the marker when the contract has a blocklist; clears it otherwise (e.g. ephemeral / unbind)."""
+    if not claude_session_id:
+        return
+    blocklist = ((contract or {}).get("guardrails") or {}).get("blocklist") or []
+    path = guardrail_marker_path(marker_dir, claude_session_id)
+    if blocklist:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"blocklist": blocklist}, ensure_ascii=False), encoding="utf-8")
+    else:
+        clear_guardrail_marker(marker_dir, claude_session_id)
+
+
+def clear_guardrail_marker(marker_dir: str, claude_session_id: str | None) -> None:
+    if not claude_session_id:
+        return
+    try:
+        guardrail_marker_path(marker_dir, claude_session_id).unlink()
+    except OSError:
+        pass
 
 
 def guardrail_decision(contract: dict | None, tool_name: str, tool_input: object) -> tuple[bool, str]:

@@ -10,6 +10,24 @@ from muxdesk.bind import (
 _SCHEMA = {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}}
 
 
+def test_guardrail_marker_write_clear(tmp_path):
+    from muxdesk.bind import clear_guardrail_marker, guardrail_marker_path, write_guardrail_marker
+    import json as _json
+
+    d = str(tmp_path)
+    write_guardrail_marker(d, "claude-1", {"guardrails": {"blocklist": ["git-push"]}})
+    p = guardrail_marker_path(d, "claude-1")
+    assert p.is_file()
+    assert _json.loads(p.read_text())["blocklist"] == ["git-push"]
+    # rewriting with no blocklist clears it
+    write_guardrail_marker(d, "claude-1", {})
+    assert not p.is_file()
+    # idempotent + tolerates None
+    clear_guardrail_marker(d, "claude-1")
+    clear_guardrail_marker(d, None)
+    write_guardrail_marker(d, None, {"guardrails": {"blocklist": ["x"]}})  # no claude id -> no-op
+
+
 def test_empty_contract_is_allowed():
     assert validate_contract(None) == (True, [])
     assert validate_contract({}) == (True, [])

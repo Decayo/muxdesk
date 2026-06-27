@@ -26,11 +26,13 @@ from fastapi.responses import FileResponse
 from muxdesk.bind import (  # noqa: E402
     build_checkin,
     checkin_hook_settings,
+    clear_guardrail_marker,
     extract_transcript_checkin,
     guardrail_decision,
     should_auto_deliver,
     validate_contract,
     would_cycle,
+    write_guardrail_marker,
 )
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
@@ -78,6 +80,19 @@ PREFIX = "/api/muxdesk"
 
 # Self URL hooks call back to (Stop -> /checkin-by-claude). Override per-deploy with MUXDESK_SELF_URL.
 _SELF_URL = os.environ.get("MUXDESK_SELF_URL", "http://127.0.0.1:8001")
+# Where bind writes per-session guardrail blocklists for the PreToolUse hook to read (local, no HTTP).
+_GUARDRAILS_DIR = os.environ.get("MUXDESK_GUARDRAILS_DIR", "/tmp/muxdesk-guardrails")
+_GUARDRAIL_HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "muxdesk-guardrail-hook")
+
+
+def _guardrail_hook_settings() -> dict:
+    """PreToolUse hook (all tools): enforce a bound session's guardrails.blocklist. Fast-allow when the
+    session has no marker (unbound / no guardrails) — a local file check, no per-tool HTTP."""
+    return {
+        "hooks": {
+            "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": f"python3 {_GUARDRAIL_HOOK}"}]}]
+        }
+    }
 
 _REPO = os.path.dirname(os.path.abspath(__file__))  # Repo root; passed via --add-dir + absolute paths for muxdesk-ask/hook
 
@@ -299,7 +314,7 @@ def create_lead(body: dict = Body(default={})) -> dict:
         model=model,
         title="orchestrator",
         system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
-        extra_settings=_merge_settings(_team_hook_settings(), _ask_hook_settings(), checkin_hook_settings(_SELF_URL)),
+        extra_settings=_merge_settings(_team_hook_settings(), _ask_hook_settings(), checkin_hook_settings(_SELF_URL), _guardrail_hook_settings()),
         add_dirs=[_REPO],  # Include muxdesk-ask skill (question-asking conventions)
     )
 
@@ -558,7 +573,7 @@ def create_session(body: dict = Body(default={})) -> dict:
         model=body.get("model"),
         title=body.get("title"),
         # AskUserQuestion -> muxdesk-ask; + a Stop hook so the session can report check-ins once it's bound
-        extra_settings=_merge_settings(_ask_hook_settings(), checkin_hook_settings(_SELF_URL)),
+        extra_settings=_merge_settings(_ask_hook_settings(), checkin_hook_settings(_SELF_URL), _guardrail_hook_settings()),
         system_prompt=BASE_SYSTEM_PROMPT,  # Question-asking rules: run muxdesk-ask directly via Bash, skip misbinding indirection
         add_dirs=[_REPO],  # Include muxdesk-ask skill (question-asking conventions, as documentation)
     )
@@ -607,7 +622,8 @@ def probe_session(sid: str) -> dict:
 @app.post(f"{PREFIX}/sessions/{{sid}}/bind")
 def bind_session(sid: str, body: dict = Body(default={})) -> dict | None:
     """Bind a session under a parent (tree) with an optional contract. Module 4 · 4b."""
-    if not manager.get(sid):
+    record = manager.get(sid)
+    if not record:
         raise HTTPException(status_code=404, detail="session not found")
     parent = body.get("parent_session_id")
     contract = body.get("contract")
@@ -623,15 +639,19 @@ def bind_session(sid: str, body: dict = Body(default={})) -> dict | None:
     if body.get("project"):
         fields["project"] = body["project"]
     registry.update(sid, **fields)
+    # mirror the blocklist to the guardrail marker the PreToolUse hook reads (cleared if none / unbound)
+    write_guardrail_marker(_GUARDRAILS_DIR, record.get("claude_session_id"), contract)
     return manager.get(sid)
 
 
 @app.post(f"{PREFIX}/sessions/{{sid}}/unbind")
 def unbind_session(sid: str) -> dict | None:
     """Detach a session from its parent and clear its contract. Module 4 · 4b."""
-    if not manager.get(sid):
+    record = manager.get(sid)
+    if not record:
         raise HTTPException(status_code=404, detail="session not found")
     registry.update(sid, parent_session_id=None, bind_contract=None)
+    clear_guardrail_marker(_GUARDRAILS_DIR, record.get("claude_session_id"))
     return manager.get(sid)
 
 
