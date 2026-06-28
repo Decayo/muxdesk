@@ -23,6 +23,7 @@ from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketD
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from muxdesk.commands import discover_commands  # noqa: E402
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
 from muxdesk.session_registry import SessionRegistry  # noqa: E402
@@ -572,6 +573,14 @@ def harness_config() -> dict:
 @app.get(f"{PREFIX}/sessions/{{sid}}")
 def get_session(sid: str) -> dict | None:
     return manager.get(sid)
+
+
+@app.get(f"{PREFIX}/sessions/{{sid}}/commands")
+def session_commands(sid: str) -> dict:
+    """Custom slash commands/skills available to this session (user ~/.claude + project workspace)."""
+    record = manager.get(sid)
+    workspace = record.get("workspace_path") if record else None
+    return {"items": discover_commands(workspace)}
 
 
 @app.post(f"{PREFIX}/sessions/{{sid}}/archive")
