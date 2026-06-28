@@ -595,7 +595,12 @@ class SessionManager:
         add_dirs: list[str] | None = None,
         permission_mode: str | None = None,
     ) -> str:
-        parts = [runtime_command or self._settings.cc_claude_command]
+        try:
+            parts = shlex.split(runtime_command or self._settings.cc_claude_command)
+        except ValueError:
+            parts = [runtime_command or self._settings.cc_claude_command]
+        if not parts:
+            parts = [self._settings.cc_claude_command]
         if resume_id:
             parts += ["--resume", resume_id]
         elif session_id:
