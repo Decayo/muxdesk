@@ -8,6 +8,7 @@ losing the conversation. See openspec change ``add-parser-multi-provider``.
 from muxdesk.parsers.base import Parser
 from muxdesk.parsers.chain import ParserChain
 from muxdesk.parsers.claude import ClaudeParser
+from muxdesk.parsers.codex import CodexParser
 from muxdesk.parsers.pane import PaneParser
 
-__all__ = ["Parser", "ClaudeParser", "PaneParser", "ParserChain"]
+__all__ = ["Parser", "ClaudeParser", "CodexParser", "PaneParser", "ParserChain"]

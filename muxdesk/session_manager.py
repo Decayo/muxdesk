@@ -6,7 +6,7 @@ import shlex
 import threading
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +14,7 @@ from muxdesk.settings import Settings
 from muxdesk.artifact_detector import ArtifactDetector
 from muxdesk.event_bus import EventBus
 from muxdesk.jsonl_tailer import JsonlTailer
+from muxdesk.parsers.codex import CodexParser
 from muxdesk.pty_bridge import PtyBridge
 from muxdesk.session_registry import SessionRegistry
 from muxdesk.single_writer_actor import SingleWriterActor
@@ -22,12 +23,45 @@ from muxdesk.tmux_driver import TmuxDriver
 from muxdesk.transcript_parser import parse_record
 
 
+# Provider-extension hooks. muxdesk stays provider-agnostic; the host application
+# (e.g. ibkr's cc_desk_standalone) supplies these to support non-Claude runtimes
+# like Codex without leaking provider knowledge into the core.
+#
+# CommandBuilder: assemble the tmux launch command. Default builds Claude Code's
+#   flag set; a codex builder swaps in codex's flags (no --session-id, -m, prompt
+#   positional, sandbox/approval flags).
+CommandBuilder = Callable[..., str]
+# TranscriptResolver: locate the jsonl transcript for a freshly-started session.
+#   Called repeatedly by the binding worker until it returns a Path or the
+#   session is deleted. Claude resolves to an exact pre-assigned filename
+#   (<projects>/<slug>/<session_id>.jsonl); Codex scans the dated sessions
+#   directory for a rollout whose session_meta.cwd matches the workspace.
+TranscriptResolver = Callable[[str, str, str | None], "Path | None"]
+# RecordParser: turn one transcript jsonl record into semantic events. Defaults
+#   to the Claude parser; Codex sessions use CodexParser.
+RecordParser = Callable[[dict], "object"]
+
+
 @dataclass
 class _SessionRuntime:
     writer: SingleWriterActor
     state: SessionStateMachine
     artifacts: ArtifactDetector
     tailer: JsonlTailer | None = None
+    parser: RecordParser | None = None  # per-session record parser (default: Claude)
+
+
+def _extract_record_metadata(parser: RecordParser | None, record: dict) -> dict:
+    """Best-effort parser metadata extraction from a raw transcript record."""
+    owner = getattr(parser, "__self__", None)
+    extractor = getattr(owner, "extract_metadata", None)
+    if not callable(extractor):
+        return {}
+    try:
+        data = extractor(record)
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _cwd_slug(abs_path: str) -> str:
@@ -35,8 +69,16 @@ def _cwd_slug(abs_path: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", abs_path)
 
 
-# Claude TUI screen sentinels (readiness probe matches via capture-pane)
-_READY_RE = re.compile(r"accept edits on|shift\+tab to cycle|\? for shortcuts|bypass permissions")
+# Runtime TUI screen sentinels (readiness probe matches via capture-pane).
+# Claude and Codex have different idle prompts; keep this broad enough to
+# recognize a stable input prompt, but pair it with _ACTIVE_TURN_RE below so a
+# running turn does not get overwritten to READY.
+_READY_RE = re.compile(
+    r"accept edits on|shift\+tab to cycle|\? for shortcuts|bypass permissions|"
+    r"Use /skills to list available skills|"
+    r"gpt-[\w.-]+(?:\s+\w+)?\s+·\s+/",
+    re.IGNORECASE,
+)
 _TRUST_RE = re.compile(r"trust this folder|Is this a project you created|Do you trust")
 _FATAL_RE = re.compile(
     r"\b403\b|Forbidden|organization (?:disabled|is not)|model[^\n]{0,30}(?:not found|not have access)",
@@ -56,9 +98,31 @@ _RATE_LIMIT_RE = re.compile(
 _WORKING_RE = re.compile(r"esc to interrupt|Channelling|Thinking|Running[…\.]|✶|✻|- · - tokens")
 # Narrow "truly running" check (used by readiness probe to detect idle): spinner with live timer "(Ns" / Running... / esc to interrupt.
 # Intentionally excludes bare ✻ -- completed residual "✻ Verb for Ns" also contains ✻, which would make probe falsely detect running, never set READY -> startup timeout ERROR.
-_ACTIVE_TURN_RE = re.compile(r"esc to interrupt|Running…|\(\d+s")
+_ACTIVE_TURN_RE = re.compile(r"esc to interrupt|Running…|Running\.\.\.|Thinking|\(\d+s", re.IGNORECASE)
 # User self-interrupt -- probe silently skips (that's the user's intent)
 _INTERRUPT_RE = re.compile(r"Interrupted by user|⎿ Interrupted|Interrupted ·")
+
+
+def _last_match_end(pattern: re.Pattern, text: str) -> int:
+    match_end = -1
+    for match in pattern.finditer(text):
+        match_end = match.end()
+    return match_end
+
+
+def _screen_is_ready(screen: str) -> bool:
+    return bool(_READY_RE.search(screen)) and not _ACTIVE_TURN_RE.search(screen)
+
+
+def _screen_is_blocked(screen: str) -> bool:
+    blocked_at = _last_match_end(_BLOCKED_SCREEN_RE, screen)
+    if blocked_at < 0:
+        return False
+    ready_at = _last_match_end(_READY_RE, screen)
+    # capture-pane includes visible scrollback. After trust/login succeeds the
+    # old blocked text can remain above the current prompt; if a later idle
+    # prompt is visible, the runtime is usable.
+    return not (ready_at > blocked_at and _screen_is_ready(screen))
 
 
 class SessionManager:
@@ -68,13 +132,42 @@ class SessionManager:
     state_machine / artifact_detector / single_writer -> push to frontend via event_bus.
     """
 
-    def __init__(self, settings: Settings, event_bus: EventBus, registry: SessionRegistry) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        event_bus: EventBus,
+        registry: SessionRegistry,
+        *,
+        command_builder: CommandBuilder | None = None,
+        transcript_resolver: TranscriptResolver | None = None,
+        parser_for: Callable[[str | None], RecordParser] | None = None,
+    ) -> None:
         self._settings = settings
         self._bus = event_bus
         self._registry = registry
         self._tmux_bin = "tmux"
         self._driver = TmuxDriver(self._tmux_bin)
         self._runtimes: dict[str, _SessionRuntime] = {}
+        # Provider extension points. Defaults keep historical (Claude-only)
+        # behavior; hosts inject overrides to support Codex / other runtimes.
+        self._command_builder = command_builder or self._build_claude_command
+        self._transcript_resolver = transcript_resolver or self._resolve_claude_transcript
+        self._parser_for = parser_for or self._default_parser_for
+
+    @staticmethod
+    def _default_parser_for(parser: str | None) -> RecordParser:
+        """Pick a record parser by provider/parser id. Defaults to Claude; ``codex``
+        uses :class:`~muxdesk.parsers.codex.CodexParser`."""
+        if parser == "codex":
+            return CodexParser().parse_record
+        return parse_record
+
+    @staticmethod
+    def _resolve_claude_transcript(workspace: str, session_id: str, projects_dir: str | None) -> Path | None:
+        """Default resolver: Claude Code's pre-assigned ``<projects>/<slug>/<id>.jsonl``."""
+        base = Path(projects_dir or Settings().cc_claude_projects_dir).expanduser()
+        target = base / _cwd_slug(workspace) / f"{session_id}.jsonl"
+        return target if target.exists() else None
 
     # --- create / resume ---
 
@@ -105,7 +198,7 @@ class SessionManager:
 
         # Pre-assign claude session id (= jsonl filename), binding hits exactly by filename, avoiding multi-session mtime races
         claude_session_id = str(uuid.uuid4())
-        command = self._build_claude_command(
+        command = self._command_builder(
             runtime_command=runtime_command,
             model=model,
             title=title,
@@ -115,6 +208,7 @@ class SessionManager:
             system_prompt=system_prompt,
             add_dirs=add_dirs,
             permission_mode=permission_mode,
+            parser=parser,
         )
         self._driver.new_session(tmux_session, workspace, command)
         pane = self._driver.first_pane(tmux_session)
@@ -145,6 +239,7 @@ class SessionManager:
             writer=SingleWriterActor(),
             state=SessionStateMachine(),
             artifacts=ArtifactDetector(workspace),
+            parser=self._parser_for(parser),
         )
         self._start_binding(app_session_id, workspace, claude_session_id, claude_projects_dir)
         self._start_readiness_probe(app_session_id, tmux_session)
@@ -161,12 +256,24 @@ class SessionManager:
         tmux_session = f"{self._settings.cc_tmux_session_prefix}-{app_session_id[:8]}"
         runtime_command = record.get("runtime_command") or self._settings.cc_claude_command
         claude_projects_dir = record.get("claude_projects_dir") or self._settings.cc_claude_projects_dir
-        command = self._build_claude_command(
+        parser = record.get("parser")
+        resume_id = record["claude_session_id"]
+        session_id = None
+        # Codex does not materialize a saved session until the first turn writes
+        # a rollout. An archived "empty" codex session therefore has nothing to
+        # `codex resume`, so reopen it as a fresh interactive shell instead of
+        # launching a dead pane with "No saved session found".
+        if parser == "codex" and not record.get("transcript_path"):
+            resume_id = None
+            session_id = str(uuid.uuid4())
+        command = self._command_builder(
             runtime_command=runtime_command,
             model=record.get("model"),
             title=record.get("title"),
-            resume_id=record["claude_session_id"],
+            resume_id=resume_id,
+            session_id=session_id,
             add_dirs=record.get("add_dirs"),
+            parser=parser,
         )
         self._driver.new_session(tmux_session, workspace, command)
         pane = self._driver.first_pane(tmux_session)
@@ -176,14 +283,18 @@ class SessionManager:
             tmux_session=tmux_session,
             pane_id=pane.pane_id if pane else None,
             pane_pid=pane.pane_pid if pane else None,
+            claude_session_id=session_id or record["claude_session_id"],
+            transcript_path=None if session_id else record.get("transcript_path"),
+            transcript_inode=None if session_id else record.get("transcript_inode"),
             state=SessionState.STARTING.value,
         )
         self._runtimes[app_session_id] = _SessionRuntime(
             writer=SingleWriterActor(),
             state=SessionStateMachine(),
             artifacts=ArtifactDetector(workspace),
+            parser=self._parser_for(parser),
         )
-        self._start_binding(app_session_id, workspace, record["claude_session_id"], claude_projects_dir)
+        self._start_binding(app_session_id, workspace, session_id or record["claude_session_id"], claude_projects_dir)
         self._start_readiness_probe(app_session_id, tmux_session)
         self._bus.publish(app_session_id, "state_change", {"mode": "AUTO", "state": "STARTING"})
         return self._registry.get(app_session_id)
@@ -312,6 +423,7 @@ class SessionManager:
                 writer=SingleWriterActor(),
                 state=SessionStateMachine(),
                 artifacts=ArtifactDetector(workspace),
+                parser=self._parser_for(record.get("parser")),
             )
             self._registry.update(sid, mode="AUTO")  # Rebuilt runtime defaults to AUTO, clearing any residual MANUAL
             self._start_binding(sid, workspace, cid, record.get("claude_projects_dir") or self._settings.cc_claude_projects_dir)
@@ -320,13 +432,15 @@ class SessionManager:
         return count
 
     def _start_binding(self, app_session_id: str, workspace: str, claude_session_id: str, claude_projects_dir: str | None = None) -> None:
-        """Background wait for `<claude_session_id>.jsonl` to appear and attach the tailer.
-        Since claude is started with --session-id, the jsonl filename is this id, ensuring exact binding with no multi-session mtime races."""
-        target = (
-            Path(claude_projects_dir or self._settings.cc_claude_projects_dir).expanduser()
-            / _cwd_slug(workspace)
-            / f"{claude_session_id}.jsonl"
-        )
+        """Background wait for the session transcript jsonl to appear and attach the tailer.
+
+        Resolution is delegated to ``self._transcript_resolver``: Claude Code
+        binds to a pre-assigned exact filename (``--session-id`` guarantees it),
+        while other runtimes (Codex) scan their transcript directory for a
+        rollout whose recorded cwd matches the workspace. The worker polls the
+        resolver until it returns a path, the session is deleted, or the tailer
+        is already bound.
+        """
 
         def worker() -> None:
             while True:
@@ -335,7 +449,8 @@ class SessionManager:
                     return  # Session has been deleted
                 if runtime.tailer is not None:
                     return  # Already bound
-                if target.exists():
+                target = self._transcript_resolver(workspace, claude_session_id, claude_projects_dir)
+                if target is not None:
                     try:
                         inode = target.stat().st_ino
                     except OSError:
@@ -391,7 +506,7 @@ class SessionManager:
                 pane_id = record.get("pane_id") if record else None
                 screen = self._driver.capture_pane(pane_id, lines=40) if pane_id else ""
 
-                if _BLOCKED_SCREEN_RE.search(screen):
+                if _screen_is_blocked(screen):
                     payload: dict = {"hint": "Login / trust directory required; use the URL below to complete login in a browser, then return to the terminal tab and paste the code"}
                     url = _LOGIN_URL_RE.search(screen)
                     if url:
@@ -404,7 +519,7 @@ class SessionManager:
                         {"reason": "fatal", "hint": "Check the terminal tab for raw output / run claude doctor"},
                     )
                     return
-                elif _READY_RE.search(screen) and not _ACTIVE_TURN_RE.search(screen):
+                elif _screen_is_ready(screen):
                     # "accept edits on" footer is present even while running tools -> must exclude "truly running",
                     # otherwise probe overwrites RUNNING_TOOL/streaming to READY every 4s (state can't detect working, stop button disappears).
                     # Uses _ACTIVE_TURN_RE (live timer) instead of _WORKING_RE: the latter's bare ✻ matches completed residual -> would get stuck STARTING->ERROR.
@@ -428,7 +543,17 @@ class SessionManager:
         runtime = self._runtimes.get(app_session_id)
         if runtime is None:
             return
-        for event in parse_record(record):
+        # Per-session parser: Claude Code transcripts use ClaudeParser, Codex
+        # rollouts use CodexParser. Falls back to the module-level Claude parser
+        # if the runtime was built without one (defensive — older callers).
+        parse = runtime.parser or parse_record
+        metadata = _extract_record_metadata(runtime.parser, record)
+        session_id = metadata.get("session_id")
+        if session_id:
+            persisted = self._registry.get(app_session_id)
+            if persisted is not None and persisted.get("claude_session_id") != session_id:
+                self._registry.update(app_session_id, claude_session_id=session_id)
+        for event in parse(record):
             etype = event["event_type"]
             payload = event["payload"]
 
@@ -594,6 +719,7 @@ class SessionManager:
         system_prompt: str | None = None,
         add_dirs: list[str] | None = None,
         permission_mode: str | None = None,
+        parser: str | None = None,
     ) -> str:
         try:
             parts = shlex.split(runtime_command or self._settings.cc_claude_command)
