@@ -84,6 +84,10 @@ class SessionManager:
         workspace_path: str | None = None,
         model: str | None = None,
         title: str | None = None,
+        provider: str | None = None,
+        runtime_command: str | None = None,
+        parser: str | None = None,
+        claude_projects_dir: str | None = None,
         extra_settings: dict | None = None,
         system_prompt: str | None = None,
         add_dirs: list[str] | None = None,
@@ -94,10 +98,15 @@ class SessionManager:
         tmux_session = f"{self._settings.cc_tmux_session_prefix}-{app_session_id[:8]}"
         model = model or self._settings.cc_default_model or None
         title = title or f"session {app_session_id[:8]}"
+        runtime_command = runtime_command or self._settings.cc_claude_command
+        provider = provider or ("claude" if runtime_command == self._settings.cc_claude_command else runtime_command)
+        parser = parser or "claude-code"
+        claude_projects_dir = str(Path(claude_projects_dir or self._settings.cc_claude_projects_dir).expanduser())
 
         # Pre-assign claude session id (= jsonl filename), binding hits exactly by filename, avoiding multi-session mtime races
         claude_session_id = str(uuid.uuid4())
         command = self._build_claude_command(
+            runtime_command=runtime_command,
             model=model,
             title=title,
             resume_id=None,
@@ -120,6 +129,10 @@ class SessionManager:
                 "transcript_path": None,
                 "transcript_inode": None,
                 "claude_session_id": claude_session_id,
+                "claude_projects_dir": claude_projects_dir,
+                "provider": provider,
+                "runtime_command": runtime_command,
+                "parser": parser,
                 "model": model,
                 "title": title,
                 "add_dirs": add_dirs or [],
@@ -133,7 +146,7 @@ class SessionManager:
             state=SessionStateMachine(),
             artifacts=ArtifactDetector(workspace),
         )
-        self._start_binding(app_session_id, workspace, claude_session_id)
+        self._start_binding(app_session_id, workspace, claude_session_id, claude_projects_dir)
         self._start_readiness_probe(app_session_id, tmux_session)
         self._bus.publish(app_session_id, "session_init", {"app_session_id": app_session_id, "state": "STARTING"})
         return record
@@ -146,7 +159,10 @@ class SessionManager:
             return record
         workspace = record["workspace_path"]
         tmux_session = f"{self._settings.cc_tmux_session_prefix}-{app_session_id[:8]}"
+        runtime_command = record.get("runtime_command") or self._settings.cc_claude_command
+        claude_projects_dir = record.get("claude_projects_dir") or self._settings.cc_claude_projects_dir
         command = self._build_claude_command(
+            runtime_command=runtime_command,
             model=record.get("model"),
             title=record.get("title"),
             resume_id=record["claude_session_id"],
@@ -167,7 +183,7 @@ class SessionManager:
             state=SessionStateMachine(),
             artifacts=ArtifactDetector(workspace),
         )
-        self._start_binding(app_session_id, workspace, record["claude_session_id"])
+        self._start_binding(app_session_id, workspace, record["claude_session_id"], claude_projects_dir)
         self._start_readiness_probe(app_session_id, tmux_session)
         self._bus.publish(app_session_id, "state_change", {"mode": "AUTO", "state": "STARTING"})
         return self._registry.get(app_session_id)
@@ -298,16 +314,16 @@ class SessionManager:
                 artifacts=ArtifactDetector(workspace),
             )
             self._registry.update(sid, mode="AUTO")  # Rebuilt runtime defaults to AUTO, clearing any residual MANUAL
-            self._start_binding(sid, workspace, cid)
+            self._start_binding(sid, workspace, cid, record.get("claude_projects_dir") or self._settings.cc_claude_projects_dir)
             self._start_readiness_probe(sid, tmux_session)
             count += 1
         return count
 
-    def _start_binding(self, app_session_id: str, workspace: str, claude_session_id: str) -> None:
+    def _start_binding(self, app_session_id: str, workspace: str, claude_session_id: str, claude_projects_dir: str | None = None) -> None:
         """Background wait for `<claude_session_id>.jsonl` to appear and attach the tailer.
         Since claude is started with --session-id, the jsonl filename is this id, ensuring exact binding with no multi-session mtime races."""
         target = (
-            Path(self._settings.cc_claude_projects_dir).expanduser()
+            Path(claude_projects_dir or self._settings.cc_claude_projects_dir).expanduser()
             / _cwd_slug(workspace)
             / f"{claude_session_id}.jsonl"
         )
@@ -569,6 +585,7 @@ class SessionManager:
     def _build_claude_command(
         self,
         *,
+        runtime_command: str | None,
         model: str | None,
         title: str | None,
         resume_id: str | None,
@@ -578,7 +595,12 @@ class SessionManager:
         add_dirs: list[str] | None = None,
         permission_mode: str | None = None,
     ) -> str:
-        parts = [self._settings.cc_claude_command]
+        try:
+            parts = shlex.split(runtime_command or self._settings.cc_claude_command)
+        except ValueError:
+            parts = [runtime_command or self._settings.cc_claude_command]
+        if not parts:
+            parts = [self._settings.cc_claude_command]
         if resume_id:
             parts += ["--resume", resume_id]
         elif session_id:

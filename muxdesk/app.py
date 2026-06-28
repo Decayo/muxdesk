@@ -35,7 +35,9 @@ from muxdesk.bind import (  # noqa: E402
     would_cycle,
     write_guardrail_marker,
 )
+from muxdesk.commands import discover_commands  # noqa: E402
 from muxdesk.event_bus import EventBus, event_to_ws_json  # noqa: E402
+from muxdesk.status import context_usage, git_status  # noqa: E402
 from muxdesk.session_manager import SessionManager  # noqa: E402
 from muxdesk.session_registry import SessionRegistry  # noqa: E402
 from muxdesk.team.team_manager import TeamManager  # noqa: E402
@@ -603,6 +605,14 @@ def get_session(sid: str) -> dict | None:
     return manager.get(sid)
 
 
+@app.get(f"{PREFIX}/sessions/{{sid}}/commands")
+def session_commands(sid: str) -> dict:
+    """Custom slash commands/skills available to this session (user ~/.claude + project workspace)."""
+    record = manager.get(sid)
+    workspace = record.get("workspace_path") if record else None
+    return {"items": discover_commands(workspace)}
+
+
 @app.post(f"{PREFIX}/sessions/{{sid}}/archive")
 def archive_session(sid: str) -> dict | None:
     manager.archive(sid)
@@ -718,6 +728,21 @@ def guardrail_check_by_claude(body: dict = Body(default={})) -> dict:
         return {"allow": True}
     allowed, reason = guardrail_decision(record.get("bind_contract"), (body or {}).get("tool_name", ""), (body or {}).get("tool_input"))
     return {"allow": allowed, "reason": reason}
+
+
+@app.get(f"{PREFIX}/sessions/{{sid}}/status")
+def session_status(sid: str) -> dict:
+    """Live status-bar segments: git branch/dirty, open shells (tmux panes), context usage."""
+    record = manager.get(sid)
+    if not record:
+        return {"git": {"branch": None, "dirty": 0}, "shells": 0, "context": None}
+    git = git_status(record.get("workspace_path"))
+    try:
+        shells = len(manager._driver.list_panes(record["tmux_session"]))
+    except Exception:  # noqa: BLE001 — best-effort; tmux session may be gone
+        shells = 0
+    context = context_usage(record.get("transcript_path"), record.get("model"))
+    return {"git": git, "shells": shells, "context": context}
 
 
 # --- claude TUI interactive menus (/model, AskUserQuestion, etc.): capture-pane detection -> clickable in conversation ---

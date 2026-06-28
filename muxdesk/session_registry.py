@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS cc_sessions (
     transcript_path   TEXT,
     transcript_inode  INTEGER,
     claude_session_id TEXT,
+    claude_projects_dir TEXT,
+    provider          TEXT,
+    runtime_command   TEXT,
+    parser            TEXT,
     model             TEXT,
     title             TEXT,
     mode              TEXT NOT NULL DEFAULT 'AUTO',
@@ -31,7 +35,7 @@ CREATE TABLE IF NOT EXISTS cc_sessions (
 
 _FIELDS = (
     "app_session_id", "tmux_session", "pane_id", "pane_pid", "workspace_path",
-    "transcript_path", "transcript_inode", "claude_session_id", "model", "title",
+    "transcript_path", "transcript_inode", "claude_session_id", "claude_projects_dir", "provider", "runtime_command", "parser", "model", "title",
     "mode", "state", "status", "created_at", "last_event_at",
     # session-tree (module 4): parent link, by-project grouping, bind contract (JSON)
     "parent_session_id", "project", "bind_contract",
