@@ -16,8 +16,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install (core + server + test)
-        run: pip install -e ".[server,test]"
+      - name: Install (core + server + test + lint)
+        run: pip install -e ".[server,test,lint]"
+      - name: Lint
+        # ruff is python-version-independent — run once on the lowest matrix entry.
+        if: matrix.python-version == '3.11'
+        run: ruff check muxdesk tests
       - name: Compile
         run: python -m py_compile muxdesk/*.py muxdesk/team/*.py
       - name: Test
