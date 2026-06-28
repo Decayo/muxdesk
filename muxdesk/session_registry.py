@@ -128,6 +128,16 @@ class SessionRegistry:
             row = cur.fetchone()
         return _decode(row) if row else None
 
+    def get_by_claude_session_id(self, claude_session_id: str) -> dict | None:
+        """Resolve a session by its claude session id (used to route Stop-hook check-ins). Newest match."""
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT * FROM cc_sessions WHERE claude_session_id = ? ORDER BY created_at DESC LIMIT 1",
+                (claude_session_id,),
+            )
+            row = cur.fetchone()
+        return _decode(row) if row else None
+
     def list(self, *, status: str | None = None) -> list[dict]:
         query = "SELECT * FROM cc_sessions"
         params: list = []

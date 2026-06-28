@@ -45,6 +45,7 @@ server = [
 ]
 test = [
     "pytest>=8.0",
+    "httpx>=0.27",  # fastapi TestClient (app-level integration tests)
 ]
 
 [project.urls]

@@ -37,6 +37,13 @@ def test_update_bind_contract(tmp_path):
     assert row["project"] == "proj"
 
 
+def test_get_by_claude_session_id(tmp_path):
+    reg = _reg(tmp_path)
+    reg.create({**_BASE, "claude_session_id": "claude-xyz"})
+    assert reg.get_by_claude_session_id("claude-xyz")["app_session_id"] == "s1"
+    assert reg.get_by_claude_session_id("missing") is None
+
+
 def test_list_by_parent_and_project(tmp_path):
     reg = _reg(tmp_path)
     reg.create({**_BASE, "app_session_id": "p", "tmux_session": "t-p", "project": "A"})

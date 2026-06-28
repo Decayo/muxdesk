@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""PreToolUse hook: enforce a bound session's contract guardrails.blocklist.
+
+Reads the PreToolUse payload from stdin ({session_id, tool_name, tool_input}). If the session has a
+guardrail marker file (written by /bind when the contract carries a blocklist), it denies tool calls
+whose name/input match a blocklist entry — otherwise it allows. Fail-open: any error allows the tool
+(the guardrail is best-effort defense, not a security boundary, and must never wedge a session).
+
+Marker dir: $MUXDESK_GUARDRAILS_DIR (default /tmp/muxdesk-guardrails); per session: <claude_id>.json.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+
+def _allow() -> None:
+    sys.exit(0)  # no output = allow
+
+
+def main() -> None:
+    try:
+        data = json.load(sys.stdin)
+    except Exception:  # noqa: BLE001 — unreadable input -> don't block
+        _allow()
+    if not isinstance(data, dict):
+        _allow()
+
+    session_id = data.get("session_id")
+    if not session_id:
+        _allow()
+
+    marker_dir = os.environ.get("MUXDESK_GUARDRAILS_DIR", "/tmp/muxdesk-guardrails")
+    marker = os.path.join(marker_dir, f"{session_id}.json")
+    try:
+        with open(marker, encoding="utf-8") as fh:
+            blocklist = (json.load(fh) or {}).get("blocklist") or []
+    except OSError:
+        _allow()  # not bound / no guardrails -> fast allow (no marker)
+    except Exception:  # noqa: BLE001 — corrupt marker -> don't block
+        _allow()
+    if not blocklist:
+        _allow()
+
+    try:
+        from muxdesk.bind import guardrail_decision
+
+        allowed, reason = guardrail_decision({"guardrails": {"blocklist": blocklist}}, data.get("tool_name", ""), data.get("tool_input"))
+    except Exception:  # noqa: BLE001 — import/logic failure -> fail open
+        _allow()
+
+    if allowed:
+        _allow()
+
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        f"{reason}.\nThis session is bound under a parent whose contract blocks this action. "
+                        "Ask the parent to relax the guardrail, or take a different approach."
+                    ),
+                }
+            },
+            ensure_ascii=False,
+        )
+    )
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
