@@ -136,8 +136,37 @@ events = list(ParserChain().reconstruct(jsonl_records=records, pane_text=screen)
                                         /tmp/muxdesk-img   ← pasted images
 ```
 
-- **Package layout** (`muxdesk/`): `app.py` (FastAPI, `create_app`), `session_manager.py`, `state_machine.py`, `transcript_parser.py`, `tmux_driver.py`, `event_bus.py`, `session_registry.py`, `pty_bridge.py`, `team/` (agent graph), `scripts/{muxdesk-ask,muxdesk-ask-hook}` (structured-ask channel).
+- **Package layout** (`muxdesk/`): `app.py` (FastAPI, `create_app`), `session_manager.py`, `state_machine.py`, `transcript_parser.py`, `tmux_driver.py`, `event_bus.py`, `session_registry.py`, `pty_bridge.py`, `team/` (agent graph), `bind.py` (session-tree contracts: validation / cycle guard / check-in / guardrails / briefing), `scripts/{muxdesk-ask,muxdesk-ask-hook,muxdesk-guardrail-hook}` (structured-ask + guardrail channels).
 - **Contract with the frontend**: REST/WS under `/api/muxdesk`. The two `/tmp/muxdesk-*` paths are the only out-of-band coupling (backend writes, frontend detects).
+
+## Session tree & bind (module 4)
+
+Sessions can be arranged into a parent→child tree with a contract describing how the child reports
+to its parent and what it may do. Endpoints (under `/api/muxdesk`):
+
+| Method · path | Purpose |
+|---|---|
+| `POST /sessions/{sid}/bind` | Bind `sid` under `parent_session_id` with an optional `contract`. Validates the contract; rejects unknown parents (404) and cycles (409). Mirrors the contract's `guardrails.blocklist` to a marker file and relays a role briefing to the child. |
+| `POST /sessions/{sid}/unbind` | Detach from parent; clear the contract + guardrail marker. |
+| `POST /sessions/{sid}/relay` | Parent → child: inject a message (`{text}`). |
+| `POST /sessions/{sid}/checkin` | Explicit check-in: validate `{output}` against the contract and push `child_checkin` to the parent's bus. |
+| `POST /checkin-by-claude` | Stop-hook entry: map the claude `session_id` → session, build a check-in from the transcript tail, validate, and (honoring `checkin.cadence`) deliver. |
+| `POST /guardrail-check-by-claude` | PreToolUse-hook entry: allow/deny a tool call against the session's `guardrails.blocklist`. |
+
+**Contract** (`bind_contract`, all fields optional; an ephemeral bind has none):
+
+```json
+{ "mission": "...", "kind": "persistent|ephemeral",
+  "deliverables": { "output_schema": { /* JSON Schema */ } },
+  "checkin": { "cadence": "on_stop|every_turn|manual" },
+  "guardrails": { "blocklist": ["git-push", "deploy", "delete"] } }
+```
+
+**Enforcement** (injected at session creation, no-op until bound): a **Stop** hook posts to
+`/checkin-by-claude` (→ validate the deliverable vs `output_schema`, deliver per `cadence`); a
+**PreToolUse** hook (`scripts/muxdesk-guardrail-hook`) reads the per-session guardrail marker
+locally and denies blocked tool calls (fast-allow when there's no marker — no per-tool HTTP). Logic
+lives in `muxdesk/bind.py` (validation, cycle guard, transcript extraction, decision, briefing).
 
 ## Configuration
 
@@ -152,6 +181,8 @@ Env vars (backend), `MUXDESK_*` prefix with legacy `CC_*` fallback:
 | `MUXDESK_CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Where transcripts live. |
 | `MUXDESK_TMUX_PREFIX` | `muxdesk` | tmux session name prefix. |
 | `MUXDESK_DB_PATH` | `/tmp/muxdesk-sessions.json` | Session registry file. |
+| `MUXDESK_SELF_URL` | `http://127.0.0.1:8001` | Base URL session hooks call back to (Stop → check-in). |
+| `MUXDESK_GUARDRAILS_DIR` | `/tmp/muxdesk-guardrails` | Per-session guardrail markers for the PreToolUse hook. |
 
 ## Development (two-repo layout)
 

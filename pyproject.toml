@@ -45,6 +45,7 @@ server = [
 ]
 test = [
     "pytest>=8.0",
+    "httpx>=0.27",  # fastapi TestClient (app-level integration tests)
 ]
 # Static lint gate (mirrors muxdesk-web's ESLint). Default ruff rules: pyflakes (F,
 # unused imports / undefined names) + a subset of pycodestyle (E) — real bugs, no style churn.
